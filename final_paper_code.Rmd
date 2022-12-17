@@ -1,0 +1,251 @@
+---
+title: "Final Paper Replication Code"
+author: "Hailey Shewprasad"
+date: "12/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Data Parsing
+```{r}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(plm)
+library(gridExtra)
+
+df_1 <- read.csv("CovidData_9.16.21.csv")
+df_2 <- read.csv("CovidData_2.17.22.csv")
+max(df_2$Date)
+
+# removes data before 1/21/2020 to eliminate the first 3 weeks
+df_1 <- df_1[which(df_1$Date > 20200121),]
+
+# get rid of NA
+df_1 <- na.omit(df_1)
+df_2 <- na.omit(df_2)
+
+# rename country name column
+colnames(df_2)[1] = "CountryName"
+colnames(df_1)[1] = "CountryName"
+
+#df2[!(df$ï..CountryName %in% df2$ï..CountryName) ,  ] 
+# there are no countries that are unique to one dataframe
+
+
+```
+
+### Descriptive visuals
+```{r}
+# create a dataframe of the fiscal measure values by country for plotting
+for(i in 1:length(unique(df_2$CountryName))){
+  keeps <- c("fiscalmeasures")
+  fisc <- df_2[which(df_2$CountryName == (unique(df_2$CountryName))[i]),]
+  
+  fisc <- fisc[keeps]
+  c_n <- gsub(" ", "_", as.character(unique(df_2$CountryName)[i]))
+  if(i == 37){
+      names(fisc) <- c("Cote_dIvoire")
+  }else{
+      names(fisc) <- c(c_n)
+
+  }
+  if (i == 1){
+     fisc_df <- fisc
+  }else{
+     fisc_df <- cbind(fisc_df, fisc)
+  }
+}
+
+# Figure 1
+fisc_df %>% gather() %>% group_by(key) %>% 
+        mutate(x=1:n()) %>%
+        ggplot(aes(x=x, y=value,group=key, colour=key)) + geom_line() + theme(legend.position="none") + labs(x = "Week", y="Fiscal Measures (Per Capita)")
+
+# create a dataframe of the deaths weekly values by country for plotting 
+
+for(i in 1:length(unique(df_2$CountryName))){
+  keeps <- c("deathsnewweekly")
+  deaths <- df_2[which(df_2$CountryName == (unique(df_2$CountryName))[i]),]
+  
+  deaths <- deaths[keeps]
+  c_n <- gsub(" ", "_", as.character(unique(df_2$CountryName)[i]))
+  if(i == 37){
+      names(deaths) <- c("Cote_dIvoire")
+  }else{
+      names(deaths) <- c(c_n)
+
+  }
+  if (i == 1){
+     deaths_df <- deaths
+  }else{
+     deaths_df <- cbind(deaths_df, deaths)
+  }
+}
+
+# Figure 2
+deaths_df %>% gather() %>% group_by(key) %>% 
+        mutate(x=1:n()) %>%
+        ggplot(aes(x=x, y=value,group=key, colour=key)) + geom_line() + theme(legend.position="none") + labs(x = "Week", y="New Deaths Count")
+# united states is the weird one that goes up
+```
+### Model
+
+```{r}
+original_fiscal <- df_2$fiscalmeasures
+df_2$fiscalmeasures <- log(df_2$fiscalmeasures+1)
+df_2$week <- seq(1:46)
+df_2$original_fiscal <- original_fiscal
+pooled_df2 <- pdata.frame(df_2, index=c("CountryName", "week"), drop.index=TRUE, row.names=TRUE)
+
+for(i in 1:5){
+  mod <- plm(deathsnewweekly ~  lag(deathsnewweekly, 1) + lag(EconomicSupportIndex,i) + lag(GovernmentResponseIndex, i)
+              + lag(healthinvestment, i) + lag(fiscalmeasures, i) + gdp_norm + agedpop  + popdensity, data=pooled_df2,
+              model="pooling", effect="twoways")
+  print(summary(mod))
+  coeff <- summary(mod)$coefficients[6,1]
+  s_err <- summary(mod)$coefficients[6,2]
+  upr <- coeff + summary(mod)$coefficients[6,2]
+  lwr <- coeff - summary(mod)$coefficients[6,2]
+  row <- c(coeff, s_err, upr, lwr)
+  if(i == 1){
+    mod_coeffs <- data.frame(i, coeff, s_err, lwr, upr)
+    colnames(mod_coeffs) <- c("week_lag", "coefficients", "std_error", "lower", "upper")
+  } else{
+    mod_coeffs <- rbind(mod_coeffs, c(i, coeff, s_err, lwr, upr))
+  }
+}
+mod_coeffs
+ggplot(data=mod_coeffs, aes(x=week_lag, y=coefficients)) + geom_point() + geom_hline(yintercept=0) +
+  labs(x="Time Lag (Weeks)", y="Log of Fiscal Measures") + scale_y_continuous(limits = c(-6, 4)) + 
+  geom_segment(aes(x = 1, y = lower[1], xend = 1, yend = upper[1])) + 
+  geom_segment(aes(x = 2, y = lower[2], xend = 2, yend = upper[2])) + 
+  geom_segment(aes(x = 3, y = lower[3], xend = 3, yend = upper[3])) +
+  geom_segment(aes(x = 4, y = lower[4], xend = 4, yend = upper[4])) +
+  geom_segment(aes(x = 5, y = lower[5], xend = 5, yend = upper[5]))
+
+
+
+```
+### Testing the result’s sensitivity to data
+```{r}
+# the paper uses log of fiscal measures -> let's look at what happens with the original data
+
+for(i in 1:5){
+  mod2 <- plm(deathsnewweekly ~  lag(deathsnewweekly, 1) + lag(EconomicSupportIndex,i) + lag(GovernmentResponseIndex, i)+ lag(healthinvestment, i) + lag(original_fiscal, i) + gdp_norm + agedpop  + popdensity, data=pooled_df2, model="pooling", effect="twoways")
+    print(summary(mod2))
+
+  coeff <- summary(mod2)$coefficients[6,1]
+  s_err <- summary(mod2)$coefficients[6,2]
+  upr <- coeff + summary(mod2)$coefficients[6,2]
+  lwr <- coeff - summary(mod2)$coefficients[6,2]
+  row <- c(coeff, s_err, upr, lwr)
+  if(i == 1){
+    mod2_coeffs <- data.frame(i, coeff, s_err, lwr, upr)
+    colnames(mod2_coeffs) <- c("week_lag", "coefficients", "std_error", "lower", "upper")
+  } else{
+    mod2_coeffs <- rbind(mod2_coeffs, c(i, coeff, s_err, lwr, upr))
+  }
+}
+
+ggplot(data=mod2_coeffs, aes(x=week_lag, y=coefficients)) + geom_point() + geom_hline(yintercept=0) +
+  labs(x="Time Lag (Weeks)", y="Fiscal Measures") + 
+  geom_segment(aes(x = 1, y = lower[1], xend = 1, yend = upper[1])) + 
+  geom_segment(aes(x = 2, y = lower[2], xend = 2, yend = upper[2])) + 
+  geom_segment(aes(x = 3, y = lower[3], xend = 3, yend = upper[3])) +
+  geom_segment(aes(x = 4, y = lower[4], xend = 4, yend = upper[4])) +
+  geom_segment(aes(x = 5, y = lower[5], xend = 5, yend = upper[5]))
+```
+### Testing the sensitivity to model choice
+```{r}
+# play around with what features are included
+
+# remove agedpop -> roughly the same, numbers are about 0.2 off
+for(i in 1:5){
+  mod3 <- plm(deathsnewweekly ~ lag(deathsnewweekly, 1) + lag(EconomicSupportIndex,i) + lag(GovernmentResponseIndex, i)
+              + lag(healthinvestment, i) + lag(fiscalmeasures, i) + gdp_norm   + popdensity, data=pooled_df2,
+              model="pooling", effect="twoways")
+  print(summary(mod3))
+
+  coeff <- summary(mod3)$coefficients[6,1]
+  s_err <- summary(mod3)$coefficients[6,2]
+  upr <- coeff + summary(mod3)$coefficients[6,2]
+  lwr <- coeff - summary(mod3)$coefficients[6,2]
+  row <- c(coeff, s_err, upr, lwr)
+  if(i == 1){
+    mod3_coeffs <- data.frame(i, coeff, s_err, lwr, upr)
+    colnames(mod3_coeffs) <- c("week_lag", "coefficients", "std_error", "lower", "upper")
+  } else{
+    mod3_coeffs <- rbind(mod3_coeffs, c(i, coeff, s_err, lwr, upr))
+  }
+}
+mod3_coeffs
+plot3 <- ggplot(data=mod3_coeffs, aes(x=week_lag, y=coefficients)) + geom_point() + geom_hline(yintercept=0) +
+  labs(x="Time Lag (Weeks)", y="Log of Fiscal Measures") + scale_y_continuous(limits = c(-6, 4)) + 
+  geom_segment(aes(x = 1, y = lower[1], xend = 1, yend = upper[1])) + 
+  geom_segment(aes(x = 2, y = lower[2], xend = 2, yend = upper[2])) + 
+  geom_segment(aes(x = 3, y = lower[3], xend = 3, yend = upper[3])) +
+  geom_segment(aes(x = 4, y = lower[4], xend = 4, yend = upper[4])) +
+  geom_segment(aes(x = 5, y = lower[5], xend = 5, yend = upper[5])) + ggtitle("(a) No Aged Population Feature")
+
+
+# remove gdp_norm -> numbers are higher
+
+for(i in 1:5){
+  mod4 <- plm(deathsnewweekly ~ lag(deathsnewweekly, 1) + lag(EconomicSupportIndex,i) + lag(GovernmentResponseIndex, i)
+              + lag(healthinvestment, i) + lag(fiscalmeasures, i)  + agedpop  + popdensity, data=pooled_df2,
+              model="pooling", effect="twoways")
+  print(summary(mod4))
+  coeff <- summary(mod4)$coefficients[6,1]
+  s_err <- summary(mod4)$coefficients[6,2]
+  upr <- coeff + summary(mod4)$coefficients[6,2]
+  lwr <- coeff - summary(mod4)$coefficients[6,2]
+  row <- c(coeff, s_err, upr, lwr)
+  if(i == 1){
+    mod4_coeffs <- data.frame(i, coeff, s_err, lwr, upr)
+    colnames(mod4_coeffs) <- c("week_lag", "coefficients", "std_error", "lower", "upper")
+  } else{
+    mod4_coeffs <- rbind(mod4_coeffs, c(i, coeff, s_err, lwr, upr))
+  }
+}
+mod4_coeffs
+plot4 <- ggplot(data=mod4_coeffs, aes(x=week_lag, y=coefficients)) + geom_point() + geom_hline(yintercept=0) +
+  labs(x="Time Lag (Weeks)", y="Log of Fiscal Measures") + scale_y_continuous(limits = c(-6, 4)) + 
+  geom_segment(aes(x = 1, y = lower[1], xend = 1, yend = upper[1])) + 
+  geom_segment(aes(x = 2, y = lower[2], xend = 2, yend = upper[2])) + 
+  geom_segment(aes(x = 3, y = lower[3], xend = 3, yend = upper[3])) +
+  geom_segment(aes(x = 4, y = lower[4], xend = 4, yend = upper[4])) +
+  geom_segment(aes(x = 5, y = lower[5], xend = 5, yend = upper[5])) + ggtitle("(b) No GDP Feature")
+
+# remove economicsupportindex lag -> everything really large and increasing instead of decreasing
+for(i in 1:5){
+  mod5 <- plm(deathsnewweekly ~ lag(deathsnewweekly, 1) + lag(GovernmentResponseIndex,i) 
+              + lag(healthinvestment, i) + lag(fiscalmeasures, i)  + agedpop + gdp_norm + popdensity, data=pooled_df2,
+              model="pooling", effect="twoways")
+  print(summary(mod5))
+  coeff <- summary(mod5)$coefficients[6,1]
+  s_err <- summary(mod5)$coefficients[6,2]
+  upr <- coeff + summary(mod5)$coefficients[6,2]
+  lwr <- coeff - summary(mod5)$coefficients[6,2]
+  row <- c(coeff, s_err, upr, lwr)
+  if(i == 1){
+    mod5_coeffs <- data.frame(i, coeff, s_err, lwr, upr)
+    colnames(mod5_coeffs) <- c("week_lag", "coefficients", "std_error", "lower", "upper")
+  } else{
+    mod5_coeffs <- rbind(mod5_coeffs, c(i, coeff, s_err, lwr, upr))
+  }
+}
+mod5_coeffs
+plot5 <- ggplot(data=mod5_coeffs, aes(x=week_lag, y=coefficients)) + geom_point() + geom_hline(yintercept=0) +
+  labs(x="Time Lag (Weeks)", y="Log of Fiscal Measures")  + 
+  geom_segment(aes(x = 1, y = lower[1], xend = 1, yend = upper[1])) + 
+  geom_segment(aes(x = 2, y = lower[2], xend = 2, yend = upper[2])) + 
+  geom_segment(aes(x = 3, y = lower[3], xend = 3, yend = upper[3])) +
+  geom_segment(aes(x = 4, y = lower[4], xend = 4, yend = upper[4])) +
+  geom_segment(aes(x = 5, y = lower[5], xend = 5, yend = upper[5])) + ggtitle("(c) No Economic Support Index Feature")
+grid.arrange(plot3, plot4, plot5, nrow = 2, ncol=2)
+```
+
